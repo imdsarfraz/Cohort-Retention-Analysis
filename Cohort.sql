@@ -105,5 +105,5 @@ SELECT
   total_revenue
 FROM ranked
 WHERE rn <= 3
-ORDER BY country, total_revenue DESC;
+ORDER BY country, total_revenue DESC; --- country k basis pe sort then TR k basis pe sort
 
