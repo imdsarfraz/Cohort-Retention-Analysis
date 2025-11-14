@@ -58,28 +58,55 @@ SELECT *
 FROM retail_data
 WHERE unitprice <=0  -- 2517 Entries ; Prices can't be Zero or Negative 
 
--------Let's Store Clean Data in a CTE------
-WITH clean_data AS (
-SELECT *
-FROM retail_data 
-WHERE Quantity >=0 AND UnitPrice >=0  AND CustomerID IS NOT NULL)
---- Lets see which country has highest Total Revenue
-SELECT DISTINCT ON (country)
-  country,
-  customerid,
-  (Quantity * UnitPrice) AS Total_revenue
-FROM clean_data
-ORDER BY country, Total_revenue DESC;
+--------DUPLICATE VALUES
+SELECT InvoiceNo, StockCode, Description, Quantity, InvoiceDate, UnitPrice, CustomerID, Country,
+       COUNT(*) AS occurrences
+FROM retail_data
+GROUP BY InvoiceNo, StockCode, Description, Quantity, InvoiceDate, UnitPrice, CustomerID, Country
+HAVING COUNT(*) > 1
+ORDER BY occurrences DESC;  ----4879 dupliacte values
 
---------------------------------------------------
-------I want to check top 3 customer ID with Max revenue from each country
----------------------------------------------------
-WITH clean_data AS (
+
+-------Let's Store Clean Data in a CTE------
+
+WITH raw_clean AS (
   SELECT *
   FROM retail_data
   WHERE Quantity >= 0
     AND UnitPrice >= 0
     AND CustomerID IS NOT NULL
+),
+clean_data AS (
+  SELECT *,
+         ROW_NUMBER() OVER (
+           PARTITION BY InvoiceNo, StockCode, CustomerID, InvoiceDate
+           ORDER BY Quantity DESC, UnitPrice DESC
+         ) AS rn
+  FROM raw_clean
+)
+SELECT *
+FROM clean_data
+WHERE rn = 1;
+
+---Saved file on local as .csv which i will be using later on because multiple CTE looks messy
+
+--------------------------------------------------
+------I want to check top 3 customer ID with Max revenue from each country
+---------------------------------------------------
+WITH raw_clean AS (
+  SELECT *
+  FROM retail_data
+  WHERE Quantity >= 0
+    AND UnitPrice >= 0
+    AND CustomerID IS NOT NULL
+),
+clean_data AS (
+  SELECT *,
+         ROW_NUMBER() OVER (
+           PARTITION BY InvoiceNo, StockCode, CustomerID, InvoiceDate
+           ORDER BY Quantity DESC, UnitPrice DESC
+         ) AS rn
+  FROM raw_clean
 ),
 cust_rev AS (
   -- total revenue per customer per country
@@ -107,3 +134,26 @@ FROM ranked
 WHERE rn <= 3
 ORDER BY country, total_revenue DESC; --- country k basis pe sort then TR k basis pe sort
 
+------------------------------------------------
+---Importing Cleaned Data-----------------------
+CREATE TABLE clean_data (
+    InvoiceNo TEXT,
+    StockCode TEXT,
+    Description TEXT,
+    Quantity INT,
+    InvoiceDate TIMESTAMP,
+    UnitPrice NUMERIC,
+    CustomerID TEXT,
+    Country TEXT,
+	rn TEXT
+);
+
+--------------- Importing CLEANED CSV file-------------------------------------------------------------------------
+
+COPY clean_data (InvoiceNo, StockCode, Description, Quantity, InvoiceDate, UnitPrice, CustomerID, Country, rn)
+FROM 'C:/Users/sarfr/OneDrive/Documents/GitHub/Cohort-Retention-Analysis/clean_data.csv'
+DELIMITER ','
+CSV HEADER;
+
+SELECT *
+FROM clean_data;
