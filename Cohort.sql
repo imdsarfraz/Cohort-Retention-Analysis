@@ -157,3 +157,41 @@ CSV HEADER;
 
 SELECT *
 FROM clean_data;
+
+----- Cohort Retention Analysis
+SELECT MIN(InvoiceDate), MAX(InvoiceDate)
+FROM clean_data;
+
+------ the month the customer made their first purchase.
+WITH first_purchase AS (
+    SELECT
+        CustomerID,
+        MIN(DATE_TRUNC('month', InvoiceDate)) AS cohort_month ----first time purchase
+    FROM clean_data
+    GROUP BY CustomerID
+)
+SELECT *
+FROM first_purchase
+ORDER BY cohort_month;
+
+---- ----------------------- ---------------------- --------------- ------------------------------------------ 
+WITH first_purchase AS (
+    SELECT
+        CustomerID,
+        MIN(DATE_TRUNC('month', InvoiceDate)) AS cohort_month  ----first time purchase
+    FROM clean_data
+    GROUP BY CustomerID
+),
+with_cohort AS (
+    SELECT
+        c.*,
+        fp.cohort_month,
+        DATE_TRUNC('month', c.InvoiceDate) AS invoice_month  ---- Next time purchase
+    FROM clean_data c
+    JOIN first_purchase fp
+        ON c.CustomerID = fp.CustomerID
+)
+SELECT *
+FROM with_cohort;
+
+-------------------------------------------------------------------------------------------------------------
