@@ -195,3 +195,153 @@ SELECT *
 FROM with_cohort;
 
 -------------------------------------------------------------------------------------------------------------
+---------- COHORT RETENTION TABLE-----------------
+WITH first_purchase AS (
+    SELECT
+        CustomerID,
+        MIN(DATE_TRUNC('month', InvoiceDate)) AS cohort_month
+    FROM clean_data
+    GROUP BY CustomerID
+),
+with_cohort AS (
+    SELECT
+        c.CustomerID,
+        fp.cohort_month,
+        DATE_TRUNC('month', c.InvoiceDate) AS invoice_month
+    FROM clean_data c
+    JOIN first_purchase fp USING (CustomerID)
+),
+cohort_index AS (
+    SELECT
+        CustomerID,
+        cohort_month,
+        invoice_month,
+        EXTRACT(YEAR FROM invoice_month) * 12 + EXTRACT(MONTH FROM invoice_month) -
+        (EXTRACT(YEAR FROM cohort_month) * 12 + EXTRACT(MONTH FROM cohort_month)) + 1
+        AS cohort_index
+    FROM with_cohort
+),
+cohort_users AS (
+    SELECT
+        cohort_month,
+        cohort_index,
+        COUNT(DISTINCT CustomerID) AS users
+    FROM cohort_index
+    GROUP BY cohort_month, cohort_index
+)
+SELECT *
+FROM cohort_users
+ORDER BY cohort_month, cohort_index;
+
+------------------------------
+-------------Convert to a Retention Matrix (Pivot Table)
+SELECT
+    cohort_month,
+    SUM(CASE WHEN cohort_index = 1 THEN users END) AS month_1,
+    SUM(CASE WHEN cohort_index = 2 THEN users END) AS month_2,
+    SUM(CASE WHEN cohort_index = 3 THEN users END) AS month_3,
+    SUM(CASE WHEN cohort_index = 4 THEN users END) AS month_4,
+    SUM(CASE WHEN cohort_index = 5 THEN users END) AS month_5,
+    SUM(CASE WHEN cohort_index = 6 THEN users END) AS month_6
+FROM (
+    WITH first_purchase AS (
+        SELECT CustomerID,
+               MIN(DATE_TRUNC('month', InvoiceDate)) AS cohort_month
+        FROM clean_data
+        GROUP BY CustomerID
+    ),
+    with_cohort AS (
+        SELECT
+            c.CustomerID,
+            fp.cohort_month,
+            DATE_TRUNC('month', c.InvoiceDate) AS invoice_month
+        FROM clean_data c
+        JOIN first_purchase fp USING (CustomerID)
+    ),
+    cohort_index AS (
+        SELECT
+            CustomerID,
+            cohort_month,
+            invoice_month,
+            EXTRACT(YEAR FROM invoice_month) * 12 + EXTRACT(MONTH FROM invoice_month) -
+            (EXTRACT(YEAR FROM cohort_month) * 12 + EXTRACT(MONTH FROM cohort_month)) + 1
+            AS cohort_index
+        FROM with_cohort
+    ),
+    cohort_users AS (
+        SELECT
+            cohort_month,
+            cohort_index,
+            COUNT(DISTINCT CustomerID) AS users
+        FROM cohort_index
+        GROUP BY cohort_month, cohort_index
+    )
+    SELECT *
+    FROM cohort_users
+) t
+GROUP BY cohort_month
+ORDER BY cohort_month;
+---------------------------------------------------------
+------------COHORT RETENTION PERCENTAGES----------------
+----------------------------------------------------------
+WITH first_purchase AS (
+    SELECT
+        CustomerID,
+        MIN(DATE_TRUNC('month', InvoiceDate)) AS cohort_month
+    FROM clean_data
+    GROUP BY CustomerID
+),
+
+with_cohort AS (
+    SELECT
+        c.CustomerID,
+        fp.cohort_month,
+        DATE_TRUNC('month', c.InvoiceDate) AS invoice_month
+    FROM clean_data c
+    JOIN first_purchase fp USING (CustomerID)
+),
+
+cohort_index AS (
+    SELECT
+        CustomerID,
+        cohort_month,
+        invoice_month,
+        EXTRACT(YEAR FROM invoice_month) * 12 + EXTRACT(MONTH FROM invoice_month) -
+        (EXTRACT(YEAR FROM cohort_month) * 12 + EXTRACT(MONTH FROM cohort_month)) + 1
+        AS cohort_index
+    FROM with_cohort
+),
+
+-- Count total customers in each cohort
+cohort_size AS (
+    SELECT
+        cohort_month,
+        COUNT(DISTINCT CustomerID) AS total_users
+    FROM cohort_index
+    WHERE cohort_index = 1
+    GROUP BY cohort_month
+),
+
+-- Count distinct customers returning in each cohort_index
+cohort_counts AS (
+    SELECT
+        cohort_month,
+        cohort_index,
+        COUNT(DISTINCT CustomerID) AS users
+    FROM cohort_index
+    GROUP BY cohort_month, cohort_index
+)
+
+SELECT
+    cc.cohort_month,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 1 THEN users END) / cs.total_users, 1) AS month_1,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 2 THEN users END) / cs.total_users, 1) AS month_2,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 3 THEN users END) / cs.total_users, 1) AS month_3,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 4 THEN users END) / cs.total_users, 1) AS month_4,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 5 THEN users END) / cs.total_users, 1) AS month_5,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 6 THEN users END) / cs.total_users, 1) AS month_6
+FROM cohort_counts cc
+JOIN JOIN cohort_size cs USING (cohort_month)
+GROUP BY cc.cohort_month, cs.total_users
+ORDER BY cc.cohort_month;
+
