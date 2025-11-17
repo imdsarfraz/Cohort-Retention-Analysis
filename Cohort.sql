@@ -284,6 +284,12 @@ ORDER BY cohort_month;
 ---------------------------------------------------------
 ------------COHORT RETENTION PERCENTAGES----------------
 ----------------------------------------------------------
+----- Cohort Retention Analysis
+SELECT MIN(InvoiceDate), MAX(InvoiceDate)
+FROM clean_data;
+
+---- FOR 13 Months
+-------------------------
 WITH first_purchase AS (
     SELECT
         CustomerID,
@@ -306,14 +312,14 @@ cohort_index AS (
         CustomerID,
         cohort_month,
         invoice_month,
-        EXTRACT(YEAR FROM invoice_month) * 12 + EXTRACT(MONTH FROM invoice_month) -
-        (EXTRACT(YEAR FROM cohort_month) * 12 + EXTRACT(MONTH FROM cohort_month)) + 1
+        (EXTRACT(YEAR FROM invoice_month) * 12 + EXTRACT(MONTH FROM invoice_month))
+        - (EXTRACT(YEAR FROM cohort_month) * 12 + EXTRACT(MONTH FROM cohort_month)) + 1
         AS cohort_index
     FROM with_cohort
 ),
 
--- Count total customers in each cohort
 cohort_size AS (
+    -- total unique users in each cohort (month 1)
     SELECT
         cohort_month,
         COUNT(DISTINCT CustomerID) AS total_users
@@ -322,26 +328,34 @@ cohort_size AS (
     GROUP BY cohort_month
 ),
 
--- Count distinct customers returning in each cohort_index
 cohort_counts AS (
+    -- distinct users active in each cohort_index (only 1..12)
     SELECT
         cohort_month,
         cohort_index,
         COUNT(DISTINCT CustomerID) AS users
     FROM cohort_index
+    WHERE cohort_index BETWEEN 1 AND 13
     GROUP BY cohort_month, cohort_index
 )
 
 SELECT
-    cc.cohort_month,
-    ROUND(100.0 * SUM(CASE WHEN cohort_index = 1 THEN users END) / cs.total_users, 1) AS month_1,
-    ROUND(100.0 * SUM(CASE WHEN cohort_index = 2 THEN users END) / cs.total_users, 1) AS month_2,
-    ROUND(100.0 * SUM(CASE WHEN cohort_index = 3 THEN users END) / cs.total_users, 1) AS month_3,
-    ROUND(100.0 * SUM(CASE WHEN cohort_index = 4 THEN users END) / cs.total_users, 1) AS month_4,
-    ROUND(100.0 * SUM(CASE WHEN cohort_index = 5 THEN users END) / cs.total_users, 1) AS month_5,
-    ROUND(100.0 * SUM(CASE WHEN cohort_index = 6 THEN users END) / cs.total_users, 1) AS month_6
+    TO_CHAR(cc.cohort_month, 'YYYY-MM') AS cohort_month,
+    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 1 THEN users END),0) / cs.total_users, 1) AS month_1,
+    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 2 THEN users END),0) / cs.total_users, 1) AS month_2,
+    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 3 THEN users END),0) / cs.total_users, 1) AS month_3,
+    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 4 THEN users END),0) / cs.total_users, 1) AS month_4,
+    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 5 THEN users END),0) / cs.total_users, 1) AS month_5,
+    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 6 THEN users END),0) / cs.total_users, 1) AS month_6,
+    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 7 THEN users END),0) / cs.total_users, 1) AS month_7,
+    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 8 THEN users END),0) / cs.total_users, 1) AS month_8,
+    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 9 THEN users END),0) / cs.total_users, 1) AS month_9,
+    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 10 THEN users END),0) / cs.total_users, 1) AS month_10,
+    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 11 THEN users END),0) / cs.total_users, 1) AS month_11,
+    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 12 THEN users END),0) / cs.total_users, 1) AS month_12,
+	ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 13 THEN users END),0) / cs.total_users, 1) AS month_13
 FROM cohort_counts cc
-JOIN JOIN cohort_size cs USING (cohort_month)
+JOIN cohort_size cs USING (cohort_month)
 GROUP BY cc.cohort_month, cs.total_users
 ORDER BY cc.cohort_month;
 
