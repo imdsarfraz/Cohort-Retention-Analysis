@@ -128,6 +128,45 @@ The numbers are in the heatmap at the top and in [`Cohort Retention Data.csv`](C
 
 Tested with PostgreSQL 16.
 
-## SQL used
+## Glossary
 
-Views (`CREATE VIEW`), CTEs (`WITH`), window functions (`MIN() OVER`, `FIRST_VALUE() OVER`, `ROW_NUMBER() OVER`), aggregate filters (`COUNT(*) FILTER (WHERE ...)`) for the checks and the pivot, date functions (`DATE_TRUNC`, `EXTRACT`, `TO_CHAR`), `SELECT DISTINCT`, `GROUP BY ... HAVING`, `CREATE TABLE ... AS` and `COPY`.
+`Cohort.sql` explains every step, column and SQL feature in comments where it's used. In short:
+
+### Terms and columns
+
+| Name | Meaning |
+| --- | --- |
+| Cohort | Customers whose first purchase was in the same month. The Jan 2011 cohort is everyone who bought for the first time in January 2011 |
+| `cohort_month` | The month of a customer's first purchase, i.e. their cohort. Months are stored as their first day (`2011-01-01`) or as text (`2011-01`) |
+| `order_month` | A month in which a customer bought something |
+| `month_number` | Months since the first purchase: 0 = the month of the first purchase, 1 = the month after it, ... |
+| `customers` | A number of customers: in a cohort and month, or the whole cohort (its size) |
+| `retention_pct`, `month_0` … `month_12` | The % of a cohort that bought something in that month. `month_1 = 22.1` in the `2011-01` row means 22.1% of January's new customers bought again in February. Blank = the cohort hasn't reached that month yet |
+| `revenue` | What a customer bought minus what they cancelled, in GBP |
+| `rank_in_country` | 1 = the customer with the most revenue in their country, 2 = the next, ... |
+
+### SQL concepts
+
+| Concept | In plain English |
+| --- | --- |
+| `CREATE TABLE ... AS SELECT` | Saves the result of a query as a new table |
+| `AS` | Gives a column or a table a name, e.g. `COUNT(*) AS total_rows` |
+| `CREATE VIEW` | Saves a query under a name. It stores no data: the query runs again every time you use the view |
+| CTE: `WITH name AS (...)` | A named step inside a query that the next steps can use like a table, so a long query reads from top to bottom instead of as queries nested in brackets |
+| Subquery | A query in brackets inside another query. Postgres runs it first and uses its result |
+| `SELECT DISTINCT` | Keeps one copy of rows that are identical |
+| `GROUP BY` with `COUNT`, `SUM`, `MIN`, `MAX` | Makes one row per group, with a count, total, smallest or largest value for each |
+| `HAVING` | Filters whole groups after `GROUP BY`. `WHERE` filters single rows before grouping |
+| `FILTER (WHERE ...)` | Makes `COUNT`, `MAX`, etc. use only the rows that match, so several counts or pivot columns fit in one query |
+| Window function: `... OVER (PARTITION BY ... ORDER BY ...)` | Calculates across related rows (e.g. all the rows of one customer) and puts the answer on every row, without merging them. `PARTITION BY` = separately for each customer, country, etc. |
+| `ROW_NUMBER()` | Numbers the rows 1, 2, 3, ... in the given order |
+| `MIN() OVER (...)`, `FIRST_VALUE() OVER (...)` | The smallest value, or the value on the first row, within the partition (e.g. a customer's first month) |
+| `DATE_TRUNC('month', d)` | Rounds a date down to the first day of its month |
+| `EXTRACT(YEAR / MONTH FROM d)` | Takes the year or the month (1 to 12) out of a date |
+| `TO_CHAR(d, 'YYYY-MM')` | Writes a date as text |
+| `::date`, `::int` | Converts a value to a date or a whole number |
+| `ROUND(x, 1)` | Rounds to 1 decimal place |
+| `NULL` | No value: missing, or not applicable. `IS NULL` checks for it |
+| `LIKE 'C%'` | Text that starts with C (`%` stands for anything) |
+| `COPY` / `\copy` | Loads a CSV file into a table, read by the database server / by psql on your computer |
+| `SET DateStyle` | Tells Postgres how to read dates such as `1/12/2010` |
