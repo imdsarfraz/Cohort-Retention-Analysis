@@ -101,6 +101,36 @@ The numbers are in the heatmap at the top and in [`Cohort Retention Data.csv`](C
 - **The Dec 2010 cohort (32% to 50% in every full month) can't be compared with the others.** The data starts on 1 Dec 2010, so everyone who bought that month lands in this cohort, including loyal customers who had been buying long before.
 - **The last value of each row (marked \*) is too low.** It's December 2011, and the data stops on 9 Dec. The Feb 2011 cohort, for example, goes from 30.5% in November to 6.8% in December: that's missing data, not customers leaving.
 
+## Common beginner mistakes
+
+Most of these don't cause an error: the query runs and the numbers are just wrong. The examples come from this data, and `Cohort.sql` points out each one where it can happen (the `Mistake:` comments).
+
+### Loading the data
+
+- **Not checking how dates are written.** `1/12/2010` is 1 December here, but PostgreSQL reads dates month-first by default. In this file the load fails at `13/12/2010`, but in a file where no day is above 12, every date would load with the day and month swapped, without any error. Set `DateStyle` before loading, and check the first and last dates afterwards.
+- **Loading the file twice.** Running the `COPY` again adds every row a second time and doubles every count. Drop and recreate the table first (the script starts with `DROP TABLE IF EXISTS`), and check `COUNT(*)` after loading.
+
+### Cleaning
+
+- **`= NULL` instead of `IS NULL`.** Nothing is equal to `NULL`, not even `NULL`, so `WHERE customer_id = NULL` matches no rows: it finds 0 missing customer IDs instead of 135,080.
+- **`>= 0` when you mean `> 0`.** `unit_price >= 0` keeps the 40 free items that cleaning should drop. Decide whether 0 is a valid value.
+- **Removing duplicates on too few columns.** Keeping one row per `invoice_no`, `stock_code`, `customer_id` and `invoice_date` also deletes 4,846 real order lines: invoice 536381 has PHOTO CLIP LINE twice, with quantities 1 and 3. A duplicate is a row that's identical in every column, which is what `SELECT DISTINCT *` removes.
+- **Numbering duplicates without removing them.** `ROW_NUMBER() ... AS rn` only labels the copies. They're still there, and still counted, until you keep `WHERE rn = 1`.
+- **Treating cancellations the same way everywhere.** For retention, a cancellation isn't a purchase, so drop it. For revenue, subtract it: counting purchases only puts customer 16446 3rd in the UK, with an order of £168,470 that was cancelled 12 minutes later.
+- **Exporting a result to CSV and loading it back.** The file can change on the way (535 rows have a `"` in the product name, e.g. `RECORD FRAME 7" SINGLE SIZE`) and goes out of date as soon as the query changes. Keep intermediate results in the database with `CREATE TABLE ... AS` or `CREATE VIEW`.
+
+### Counting
+
+- **Counting rows instead of customers.** An invoice has one row per product, so `COUNT(*)` on the sales counts product lines: in January 2011 the cohort's 417 new customers bought 10,877 of them. Use `COUNT(DISTINCT customer_id)`, or first make one row per customer per month, as `customer_months` does.
+- **Dividing two whole numbers.** In PostgreSQL `92 / 417` is `0`, because dividing integers drops the decimals, so `customers / cohort_size * 100` gives 0%. Start with `100.0`: `100.0 * 92 / 417` = 22.06.
+- **Subtracting months without the years.** Month numbers alone make Dec 2010 to Feb 2011 `2 - 12 = -10` months. Use years apart × 12 + months apart.
+
+### Reading the results
+
+- **Showing months that haven't happened yet as 0%.** Filling the blanks with `COALESCE(..., 0)` turns "no data yet" into "nobody came back". Leave them blank (`NULL`).
+- **Reading an incomplete month as customers leaving.** The data stops on 9 Dec 2011, so every December 2011 value is too low (the Feb 2011 cohort goes from 30.5% in November to 6.8%). Check the last date, and leave out or flag a partial month.
+- **Comparing the first cohort with the others.** The data starts on 1 Dec 2010, so the Dec 2010 cohort includes customers who were already buying before then, and it looks far more loyal (32% to 50% in every full month).
+
 ## Run it
 
 1. Install [PostgreSQL](https://www.postgresql.org/download/) and a client (pgAdmin or psql), and clone this repo.
@@ -128,6 +158,45 @@ The numbers are in the heatmap at the top and in [`Cohort Retention Data.csv`](C
 
 Tested with PostgreSQL 16.
 
-## SQL used
+## Glossary
 
-Views (`CREATE VIEW`), CTEs (`WITH`), window functions (`MIN() OVER`, `FIRST_VALUE() OVER`, `ROW_NUMBER() OVER`), aggregate filters (`COUNT(*) FILTER (WHERE ...)`) for the checks and the pivot, date functions (`DATE_TRUNC`, `EXTRACT`, `TO_CHAR`), `SELECT DISTINCT`, `GROUP BY ... HAVING`, `CREATE TABLE ... AS` and `COPY`.
+`Cohort.sql` explains every step, column and SQL feature in comments where it's used. In short:
+
+### Terms and columns
+
+| Name | Meaning |
+| --- | --- |
+| Cohort | Customers whose first purchase was in the same month. The Jan 2011 cohort is everyone who bought for the first time in January 2011 |
+| `cohort_month` | The month of a customer's first purchase, i.e. their cohort. Months are stored as their first day (`2011-01-01`) or as text (`2011-01`) |
+| `order_month` | A month in which a customer bought something |
+| `month_number` | Months since the first purchase: 0 = the month of the first purchase, 1 = the month after it, ... |
+| `customers` | A number of customers: in a cohort and month, or the whole cohort (its size) |
+| `retention_pct`, `month_0` … `month_12` | The % of a cohort that bought something in that month. `month_1 = 22.1` in the `2011-01` row means 22.1% of January's new customers bought again in February. Blank = the cohort hasn't reached that month yet |
+| `revenue` | What a customer bought minus what they cancelled, in GBP |
+| `rank_in_country` | 1 = the customer with the most revenue in their country, 2 = the next, ... |
+
+### SQL concepts
+
+| Concept | In plain English |
+| --- | --- |
+| `CREATE TABLE ... AS SELECT` | Saves the result of a query as a new table |
+| `AS` | Gives a column or a table a name, e.g. `COUNT(*) AS total_rows` |
+| `CREATE VIEW` | Saves a query under a name. It stores no data: the query runs again every time you use the view |
+| CTE: `WITH name AS (...)` | A named step inside a query that the next steps can use like a table, so a long query reads from top to bottom instead of as queries nested in brackets |
+| Subquery | A query in brackets inside another query. Postgres runs it first and uses its result |
+| `SELECT DISTINCT` | Keeps one copy of rows that are identical |
+| `GROUP BY` with `COUNT`, `SUM`, `MIN`, `MAX` | Makes one row per group, with a count, total, smallest or largest value for each |
+| `HAVING` | Filters whole groups after `GROUP BY`. `WHERE` filters single rows before grouping |
+| `FILTER (WHERE ...)` | Makes `COUNT`, `MAX`, etc. use only the rows that match, so several counts or pivot columns fit in one query |
+| Window function: `... OVER (PARTITION BY ... ORDER BY ...)` | Calculates across related rows (e.g. all the rows of one customer) and puts the answer on every row, without merging them. `PARTITION BY` = separately for each customer, country, etc. |
+| `ROW_NUMBER()` | Numbers the rows 1, 2, 3, ... in the given order |
+| `MIN() OVER (...)`, `FIRST_VALUE() OVER (...)` | The smallest value, or the value on the first row, within the partition (e.g. a customer's first month) |
+| `DATE_TRUNC('month', d)` | Rounds a date down to the first day of its month |
+| `EXTRACT(YEAR / MONTH FROM d)` | Takes the year or the month (1 to 12) out of a date |
+| `TO_CHAR(d, 'YYYY-MM')` | Writes a date as text |
+| `::date`, `::int` | Converts a value to a date or a whole number |
+| `ROUND(x, 1)` | Rounds to 1 decimal place |
+| `NULL` | No value: missing, or not applicable. `IS NULL` checks for it |
+| `LIKE 'C%'` | Text that starts with C (`%` stands for anything) |
+| `COPY` / `\copy` | Loads a CSV file into a table, read by the database server / by psql on your computer |
+| `SET DateStyle` | Tells Postgres how to read dates such as `1/12/2010` |
