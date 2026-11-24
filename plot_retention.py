@@ -30,7 +30,7 @@ plt.rcParams["font.sans-serif"] = ["Segoe UI", "Helvetica", "Arial", "DejaVu San
 
 df = pd.read_csv(HERE / "Cohort Retention Data.csv", index_col="cohort_month")
 cohorts = pd.PeriodIndex(df.index, freq="M")
-rates = df.filter(like="month_").to_numpy()  # rows = cohorts, columns = month_1 ... month_13
+rates = df.filter(like="month_").to_numpy()  # rows = cohorts, column j = month_j (months since first purchase)
 n_rows, n_cols = rates.shape
 
 
@@ -54,7 +54,7 @@ def draw(theme):
             value = rates[i, j]
             if np.isnan(value):  # the cohort hasn't reached this month yet
                 continue
-            # month 1 is 100% by definition, so it gets a neutral grey instead of a colour from the scale
+            # month 0 is 100% by definition, so it gets a neutral grey instead of a colour from the scale
             fill = t["neutral"] if j == 0 else cmap(norm(value))
             ax.add_patch(plt.Rectangle((j + 0.03, i + 0.05), 0.94, 0.90, facecolor=fill, linewidth=0))
             label = f"{value:.0f}" if j == 0 else f"{value:.1f}"
@@ -73,7 +73,7 @@ def draw(theme):
 
     ax.set_xlim(0, n_cols)
     ax.set_ylim(n_rows, 0)  # first cohort at the top
-    ax.set_xticks(np.arange(n_cols) + 0.5, labels=range(1, n_cols + 1))
+    ax.set_xticks(np.arange(n_cols) + 0.5, labels=range(n_cols))
     ax.set_yticks(np.arange(n_rows) + 0.5, labels=[c.strftime("%b %Y") for c in cohorts])
     ax.xaxis.tick_top()
     ax.xaxis.set_label_position("top")
@@ -91,7 +91,7 @@ def draw(theme):
     bar.outline.set_visible(False)
     bar.ax.tick_params(length=0, colors=t["muted"], labelsize=7.5)
     bar.set_label("% of the cohort buying in that month", color=t["muted"], fontsize=8)
-    fig.text(0.47, 0.06, "Month 1 = first purchase (100%).  Blank = not reached yet.\n"
+    fig.text(0.47, 0.06, "Month 0 = first purchase (100%).  Blank = not reached yet.\n"
              "* Dec 2011: the data stops on 9 Dec, so these are too low.",
              fontsize=7.5, color=t["muted"], va="bottom", linespacing=1.6)
 
