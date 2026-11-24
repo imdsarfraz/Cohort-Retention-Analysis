@@ -1,25 +1,37 @@
+-------------------------------------------------------------------------------------------------
+-- COHORT RETENTION ANALYSIS (PostgreSQL)
+-- Data : UCI Online Retail, sales of a UK online gift shop from 1 Dec 2010 to 9 Dec 2011
+-- Steps: load the CSV -> clean -> top customers by country -> monthly cohort retention
+-------------------------------------------------------------------------------------------------
+
 ------Creating Table--------------------------------------------------------------
+DROP TABLE IF EXISTS retail_data;  -- so re-running the script doesn't load the data twice
 CREATE TABLE retail_data (
-    InvoiceNo TEXT,
+    InvoiceNo TEXT,         -- starts with 'C' if the invoice was cancelled
     StockCode TEXT,
     Description TEXT,
     Quantity INT,
     InvoiceDate TIMESTAMP,
-    UnitPrice NUMERIC,
+    UnitPrice NUMERIC,      -- price of one unit, in GBP
     CustomerID TEXT,
     Country TEXT
 );
 
 
 --------------- Importing CSV file-------------------------------------------------------------------------
+-- Dates in the file are day-first (1/12/2010 8:26 = 1 Dec 2010). Postgres reads them month-first by
+-- default, and then the COPY fails: date/time field value out of range: "13/12/2010 9:02"
+SET DateStyle = 'ISO, DMY';
 
+-- Change the path to where you saved the repo. COPY reads the file on the database server: if you get
+-- "permission denied", run the same command in psql as \copy (on one line) or use pgAdmin's Import/Export.
 COPY retail_data (InvoiceNo, StockCode, Description, Quantity, InvoiceDate, UnitPrice, CustomerID, Country)
 FROM 'C:/Users/sarfr/OneDrive/Documents/GitHub/Cohort-Retention-Analysis/Retail_Data.csv'
 DELIMITER ','
 CSV HEADER;
 
-SELECT * 
-FROM retail_data
+SELECT *
+FROM retail_data;
 
 ---- Checking Column Names and Data Types----------------
 SELECT column_name, data_type
@@ -52,11 +64,13 @@ WHERE stockcode IS NULL; --NONE
 
 SELECT *
 FROM retail_data
-WHERE quantity <=0  --10,624 Entries ==> Wrong Data ==> Remove
+WHERE quantity <=0;  --10,624 Entries ==> Wrong Data ==> Remove
+--- 9,288 of them are cancellations/returns (InvoiceNo starts with 'C') and the other 1,336 are stock
+--- write-offs ('damaged', 'thrown away', ...) with no CustomerID, so none of them is a purchase.
 
 SELECT *
 FROM retail_data
-WHERE unitprice <=0  -- 2517 Entries ; Prices can't be Zero or Negative 
+WHERE unitprice <=0;  -- 2517 Entries ; Prices can't be Zero or Negative
 
 --------DUPLICATE VALUES
 SELECT InvoiceNo, StockCode, Description, Quantity, InvoiceDate, UnitPrice, CustomerID, Country,
@@ -64,49 +78,44 @@ SELECT InvoiceNo, StockCode, Description, Quantity, InvoiceDate, UnitPrice, Cust
 FROM retail_data
 GROUP BY InvoiceNo, StockCode, Description, Quantity, InvoiceDate, UnitPrice, CustomerID, Country
 HAVING COUNT(*) > 1
-ORDER BY occurrences DESC;  ----4879 dupliacte values
+ORDER BY occurrences DESC;  ----4879 rows appear more than once ==> 5,268 extra copies to remove
 
 
--------Let's Store Clean Data in a CTE------
-
+-------Let's Store Clean Data in a Table------
+---CREATE TABLE ... AS saves the result, so the queries below can use clean_data directly
+---instead of repeating the CTEs (or exporting a .csv and importing it back).
+DROP TABLE IF EXISTS clean_data;
+CREATE TABLE clean_data AS
 WITH raw_clean AS (
   SELECT *
   FROM retail_data
-  WHERE Quantity >= 0
-    AND UnitPrice >= 0
+  WHERE Quantity > 0           -- > 0, not >= 0: zero is wrong data too (40 rows here have UnitPrice = 0)
+    AND UnitPrice > 0
     AND CustomerID IS NOT NULL
-),
-clean_data AS (
-  SELECT *,
-         ROW_NUMBER() OVER (
-           PARTITION BY InvoiceNo, StockCode, CustomerID, InvoiceDate
-           ORDER BY Quantity DESC, UnitPrice DESC
-         ) AS rn
-  FROM raw_clean
 )
-SELECT *
-FROM clean_data
-WHERE rn = 1;
+-- A duplicate has the same values in all 8 columns (as in the check above), so DISTINCT removes them.
+-- A ROW_NUMBER() over fewer columns, e.g. (InvoiceNo, StockCode, CustomerID, InvoiceDate), would also
+-- delete 4,846 real order lines: invoice 536381 has PHOTO CLIP LINE twice, with qty 1 and qty 3.
+SELECT DISTINCT *
+FROM raw_clean;
 
----Saved file on local as .csv which i will be using later on because multiple CTE looks messy
+SELECT COUNT(*) AS total_rows, COUNT(DISTINCT CustomerID) AS customers
+FROM clean_data;  --- 3,92,692 rows, 4,338 customers
+
+---To save it as clean_data.csv, run this in psql:
+---\copy (SELECT * FROM clean_data ORDER BY InvoiceNo, StockCode, Quantity) TO 'clean_data.csv' CSV HEADER
 
 --------------------------------------------------
 ------I want to check top 3 customer ID with Max revenue from each country
 ---------------------------------------------------
-WITH raw_clean AS (
-  SELECT *
+-- Revenue = purchases minus cancellations, so this starts from retail_data (clean_data has no cancellations).
+-- From clean_data, customer 16446 comes 3rd in the UK, but almost all of their £168k is one order of
+-- 80,995 PAPER CRAFT, LITTLE BIRDIE that was cancelled 12 minutes later.
+WITH sales AS (
+  SELECT DISTINCT *          -- no duplicates, as in clean_data
   FROM retail_data
-  WHERE Quantity >= 0
-    AND UnitPrice >= 0
-    AND CustomerID IS NOT NULL
-),
-clean_data AS (
-  SELECT *,
-         ROW_NUMBER() OVER (
-           PARTITION BY InvoiceNo, StockCode, CustomerID, InvoiceDate
-           ORDER BY Quantity DESC, UnitPrice DESC
-         ) AS rn
-  FROM raw_clean
+  WHERE CustomerID IS NOT NULL
+    AND UnitPrice > 0        -- rows with Quantity < 0 (cancellations) stay in, so they get subtracted
 ),
 cust_rev AS (
   -- total revenue per customer per country
@@ -114,7 +123,7 @@ cust_rev AS (
     customerid,
     country,
     SUM(quantity * unitprice) AS total_revenue
-  FROM clean_data
+  FROM sales
   GROUP BY customerid, country
 ),
 ranked AS (
@@ -135,32 +144,9 @@ WHERE rn <= 3
 ORDER BY country, total_revenue DESC; --- country k basis pe sort then TR k basis pe sort
 
 ------------------------------------------------
----Importing Cleaned Data-----------------------
-CREATE TABLE clean_data (
-    InvoiceNo TEXT,
-    StockCode TEXT,
-    Description TEXT,
-    Quantity INT,
-    InvoiceDate TIMESTAMP,
-    UnitPrice NUMERIC,
-    CustomerID TEXT,
-    Country TEXT,
-	rn TEXT
-);
-
---------------- Importing CLEANED CSV file-------------------------------------------------------------------------
-
-COPY clean_data (InvoiceNo, StockCode, Description, Quantity, InvoiceDate, UnitPrice, CustomerID, Country, rn)
-FROM 'C:/Users/sarfr/OneDrive/Documents/GitHub/Cohort-Retention-Analysis/clean_data.csv'
-DELIMITER ','
-CSV HEADER;
-
-SELECT *
-FROM clean_data;
-
 ----- Cohort Retention Analysis
 SELECT MIN(InvoiceDate), MAX(InvoiceDate)
-FROM clean_data;
+FROM clean_data;  --- 2010-12-01 08:26 to 2011-12-09 12:50 ==> Dec 2011 only covers 1-9 Dec
 
 ------ the month the customer made their first purchase.
 WITH first_purchase AS (
@@ -212,6 +198,8 @@ with_cohort AS (
     JOIN first_purchase fp USING (CustomerID)
 ),
 cohort_index AS (
+    -- months since the first purchase, counting the first month as 1
+    -- e.g. first purchase Dec 2010, this purchase Feb 2011: (2011*12 + 2) - (2010*12 + 12) + 1 = 3
     SELECT
         CustomerID,
         cohort_month,
@@ -329,7 +317,7 @@ cohort_size AS (
 ),
 
 cohort_counts AS (
-    -- distinct users active in each cohort_index (only 1..12)
+    -- distinct users active in each cohort_index (1..13)
     SELECT
         cohort_month,
         cohort_index,
@@ -339,21 +327,25 @@ cohort_counts AS (
     GROUP BY cohort_month, cohort_index
 )
 
+-- Months a cohort hasn't reached yet (e.g. month_2 of the 2011-12 cohort) are left NULL (blank), not 0.0,
+-- so they don't read as "nobody came back".
+-- The last value in each row is Dec 2011, which only has data up to 9 Dec, so it is lower than it should be.
 SELECT
     TO_CHAR(cc.cohort_month, 'YYYY-MM') AS cohort_month,
-    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 1 THEN users END),0) / cs.total_users, 1) AS month_1,
-    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 2 THEN users END),0) / cs.total_users, 1) AS month_2,
-    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 3 THEN users END),0) / cs.total_users, 1) AS month_3,
-    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 4 THEN users END),0) / cs.total_users, 1) AS month_4,
-    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 5 THEN users END),0) / cs.total_users, 1) AS month_5,
-    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 6 THEN users END),0) / cs.total_users, 1) AS month_6,
-    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 7 THEN users END),0) / cs.total_users, 1) AS month_7,
-    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 8 THEN users END),0) / cs.total_users, 1) AS month_8,
-    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 9 THEN users END),0) / cs.total_users, 1) AS month_9,
-    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 10 THEN users END),0) / cs.total_users, 1) AS month_10,
-    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 11 THEN users END),0) / cs.total_users, 1) AS month_11,
-    ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 12 THEN users END),0) / cs.total_users, 1) AS month_12,
-	ROUND(100.0 * COALESCE(SUM(CASE WHEN cohort_index = 13 THEN users END),0) / cs.total_users, 1) AS month_13
+    cs.total_users AS customers,  -- cohort size: customers whose first purchase was in that month
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 1 THEN users END) / cs.total_users, 1) AS month_1,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 2 THEN users END) / cs.total_users, 1) AS month_2,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 3 THEN users END) / cs.total_users, 1) AS month_3,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 4 THEN users END) / cs.total_users, 1) AS month_4,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 5 THEN users END) / cs.total_users, 1) AS month_5,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 6 THEN users END) / cs.total_users, 1) AS month_6,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 7 THEN users END) / cs.total_users, 1) AS month_7,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 8 THEN users END) / cs.total_users, 1) AS month_8,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 9 THEN users END) / cs.total_users, 1) AS month_9,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 10 THEN users END) / cs.total_users, 1) AS month_10,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 11 THEN users END) / cs.total_users, 1) AS month_11,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 12 THEN users END) / cs.total_users, 1) AS month_12,
+    ROUND(100.0 * SUM(CASE WHEN cohort_index = 13 THEN users END) / cs.total_users, 1) AS month_13
 FROM cohort_counts cc
 JOIN cohort_size cs USING (cohort_month)
 GROUP BY cc.cohort_month, cs.total_users
