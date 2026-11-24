@@ -19,14 +19,17 @@
 --   SELECT * FROM customer_months LIMIT 20;
 --
 -- Reading this file: lines starting with -- are comments, which Postgres ignores. Each step says
--- what its columns mean ("Columns"), explains the SQL it uses for the first time ("SQL") and gives
--- its result with how to read it ("Result").
+-- what its columns mean ("Columns"), explains the SQL it uses for the first time ("SQL"), gives
+-- its result with how to read it ("Result") and warns about mistakes beginners often make there
+-- ("Mistake"). The README lists all the mistakes in one place.
 -- =============================================================================================
 
 
 -- 0. Start from scratch, so the whole script can be run again ---------------------------------
 -- SQL: DROP VIEW / DROP TABLE delete a view or a table. IF EXISTS skips the ones that don't exist
 --      yet instead of stopping with an error. The views go first because they're built on the tables.
+-- Mistake: running the COPY in step 1 again without dropping the table first. It adds every row a
+--          second time and doubles all the counts.
 DROP VIEW IF EXISTS retention_matrix, cohort_retention, customer_months;
 DROP TABLE IF EXISTS clean_data, retail_data;
 
@@ -51,6 +54,9 @@ CREATE TABLE retail_data (
 -- SQL: SET DateStyle tells Postgres how to read dates. The dates in the file are day-first
 --      (1/12/2010 8:26 = 1 Dec 2010), but Postgres reads them month-first by default and the
 --      COPY fails at "13/12/2010". The setting lasts until you disconnect.
+-- Mistake: not checking how the dates are written. Here the COPY fails, which is easy to notice,
+--          but in a file where no day is above 12, every date would load with the day and month
+--          swapped and no error. Check the first and last dates after loading (step 3 does).
 SET DateStyle = 'ISO, DMY';
 
 -- SQL: COPY loads a file into a table. FORMAT csv = the values are separated by commas,
@@ -82,6 +88,8 @@ SELECT * FROM retail_data LIMIT 5;
 --      A query in brackets is a subquery: Postgres runs it first and uses its result.
 --      SELECT DISTINCT * keeps one copy of each set of identical rows, so
 --      all rows - distinct rows = the extra copies.
+-- Mistake: writing customer_id = NULL instead of customer_id IS NULL. Nothing is equal to NULL, not
+--          even NULL, so "= NULL" matches no rows and would report 0 missing customer IDs.
 SELECT
     COUNT(*)                                                                     AS total_rows,
     COUNT(*) FILTER (WHERE customer_id IS NULL)                                  AS no_customer_id,
@@ -102,6 +110,15 @@ FROM retail_data;
 -- SQL: CREATE TABLE ... AS saves the result of a query as a new table, so the later steps can use
 --      it without repeating the query. WHERE keeps only the rows where the conditions are true
 --      (AND = both must be true).
+-- Mistakes:
+--   >= 0 instead of > 0: unit_price >= 0 would keep the 40 free items, which aren't purchases.
+--   Removing duplicates on a few columns only: keeping one row per invoice_no, stock_code,
+--   customer_id and invoice_date (e.g. with ROW_NUMBER()) also deletes 4,846 real order lines.
+--   Invoice 536381 has PHOTO CLIP LINE twice, with quantities 1 and 3. And if you number the
+--   copies with ROW_NUMBER() ... AS rn, they're only removed once you keep WHERE rn = 1.
+--   Exporting the result to a CSV and loading it back instead of saving it as a table: the file can
+--   change on the way (535 rows here have a " in the product name, e.g. RECORD FRAME 7" SINGLE SIZE)
+--   and goes out of date when the query changes.
 CREATE TABLE clean_data AS
 SELECT DISTINCT *                -- a duplicate has the same values in all 8 columns
 FROM retail_data
@@ -125,8 +142,7 @@ FROM clean_data;
 
 -- 4. Top 3 customers by revenue in each country -----------------------------------------------
 -- Revenue = purchases minus cancellations, so this starts from retail_data (clean_data has no
--- cancellations). Counting purchases only, customer 16446 would come 3rd in the UK because of
--- one order of 80,995 items that was cancelled 12 minutes later.
+-- cancellations).
 -- Columns:
 --   country          the customer's country
 --   rank_in_country  1 = the customer with the most revenue in that country, 2 = the next, ...
@@ -144,6 +160,10 @@ FROM clean_data;
 --      GROUP BY, a window function keeps every row. WHERE can't use its result in the same SELECT,
 --      which is why the ranking is its own step.
 --      ORDER BY sorts the final result.
+-- Mistake: computing revenue from clean_data, i.e. ignoring the cancellations. Customer 16446
+--          would then come 3rd in the UK, because of one order of 80,995 items that was cancelled
+--          12 minutes later. For retention it's the other way round: a cancellation isn't a
+--          purchase, so clean_data rightly leaves them out.
 WITH customer_revenue AS (
     SELECT
         country,
@@ -187,6 +207,11 @@ ORDER BY country, rank_in_country;
 --      the earliest order_month of the same customer, without merging the rows.
 --      EXTRACT(YEAR FROM x) and EXTRACT(MONTH FROM x) take the year (e.g. 2011) or the month
 --      (1 to 12) out of a date.
+-- Mistakes:
+--   Counting rows instead of customers: an invoice has one row per product, so COUNT(*) on the sales
+--   counts product lines. In January 2011 the cohort's 417 new customers bought 10,877 product lines.
+--   Count distinct customers, or first make one row per customer per month, as this view does.
+--   Subtracting the months without the years: Dec 2010 -> Feb 2011 would be 2 - 12 = -10 months.
 CREATE VIEW customer_months AS
 WITH months AS (
     -- one row per customer per month: DISTINCT keeps a single row when a customer bought
@@ -232,8 +257,10 @@ SELECT * FROM customer_months WHERE customer_id = 12347 ORDER BY order_month;
 -- SQL: FIRST_VALUE(customers) OVER (PARTITION BY cohort_month ORDER BY month_number) is a window
 --      function: on every row it gives the customers value of the first row of the same cohort,
 --      in month_number order, i.e. the month-0 count.
---      ROUND(x, 1) rounds to 1 decimal place. It's 100.0 and not 100 because dividing two whole
---      numbers gives a whole number in Postgres (92 / 417 = 0); 100.0 keeps the decimals.
+--      ROUND(x, 1) rounds to 1 decimal place.
+-- Mistake: customers / cohort size * 100 gives 0 here, because dividing two whole numbers drops the
+--          decimals in Postgres (92 / 417 = 0). Starting with 100.0 makes it a decimal division:
+--          100.0 * 92 / 417 = 22.06.
 CREATE VIEW cohort_retention AS
 WITH counts AS (
     -- customer_months has one row per customer per month, so COUNT(*) counts customers
@@ -300,4 +327,10 @@ SELECT * FROM retention_matrix ORDER BY cohort_month;
 -- month_1 = 22.1 means 22.1% of January's new customers bought again in February, and
 -- month_3 = 23.0 means 23.0% bought in April (3 months after January).
 -- Blank (NULL) = the cohort hasn't reached that month yet, e.g. month_1 of the 2011-12 cohort.
--- The last value in each row is December 2011, which only has data up to the 9th, so it is too low.
+-- Mistakes when reading it:
+--   Filling the blanks with 0 (e.g. with COALESCE(..., 0)): 0% reads as "nobody came back", when the
+--   month just hasn't happened yet.
+--   Reading the last value of each row as customers leaving: it's December 2011, which only has data
+--   up to the 9th, so it is too low (the 2011-02 cohort goes from 30.5% in November to 6.8%).
+--   Comparing the first cohort with the others: the data starts on 1 Dec 2010, so the 2010-12 cohort
+--   includes customers who were already buying before that, and looks far more loyal (32% to 50%).
