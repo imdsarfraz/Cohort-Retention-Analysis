@@ -102,9 +102,6 @@ FROM raw_clean;
 SELECT COUNT(*) AS total_rows, COUNT(DISTINCT CustomerID) AS customers
 FROM clean_data;  --- 3,92,692 rows, 4,338 customers
 
----To save it as clean_data.csv, run this in psql:
----\copy (SELECT * FROM clean_data ORDER BY InvoiceNo, StockCode, Quantity) TO 'clean_data.csv' CSV HEADER
-
 --------------------------------------------------
 ------I want to check top 3 customer ID with Max revenue from each country
 ---------------------------------------------------

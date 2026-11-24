@@ -32,7 +32,6 @@ Chen, D. (2015). *Online Retail* [Dataset]. UCI Machine Learning Repository. htt
 | --- | --- |
 | [`Cohort.sql`](Cohort.sql) | All the SQL: load the CSV, clean it, top customers per country, cohort retention |
 | [`Retail_Data.csv`](Retail_Data.csv) | Raw data (541,909 rows) |
-| [`clean_data.csv`](clean_data.csv) | Cleaned data (392,692 rows), exported from the `clean_data` table |
 | [`Cohort Retention Data.csv`](Cohort%20Retention%20Data.csv) | The result: size of each cohort and % of it active in months 1 to 13 |
 | [`plot_retention.py`](plot_retention.py) | Draws the heatmap above from the result |
 | [`images/`](images) | The heatmap (light and dark versions) |
